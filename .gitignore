@@ -1,0 +1,10 @@
+device-simulator/certs/
+*.pem
+*.key
+*.crt
+__pycache__/
+*.pyc
+.env
+venv/
+.aws/
+.DS_Store
