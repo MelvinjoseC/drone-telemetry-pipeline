@@ -8,3 +8,11 @@ __pycache__/
 venv/
 .aws/
 .DS_Store
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.backup
+*.tfvars
+*.tfvars.json
+infrastructure/terraform/*.zip
