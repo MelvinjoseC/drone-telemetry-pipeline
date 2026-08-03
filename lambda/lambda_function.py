@@ -60,15 +60,22 @@ def build_s3_key(drone_id, timestamp_str):
 # ── Process single record ─────────────────────────
 def process_record(record):
     """Decode and validate one Kinesis record."""
-    # Kinesis data is base64 encoded
-    raw     = base64.b64decode(record["kinesis"]["data"]).decode("utf-8")
-    payload = json.loads(raw)
+    try:
+        # Kinesis data is base64 encoded
+        raw = base64.b64decode(record["kinesis"]["data"]).decode("utf-8")
+    except Exception as e:
+        raise ValueError(f"Failed to base64 decode record data: {str(e)}")
+
+    try:
+        payload = json.loads(raw)
+    except Exception as e:
+        raise ValueError(f"Failed to parse JSON payload: {str(e)}")
 
     required = ["drone_id", "timestamp", "latitude", "longitude",
                 "altitude_m", "speed_kmh", "battery_pct"]
     for field in required:
-        if field not in payload:
-            raise ValueError(f"Missing field: {field}")
+        if field not in payload or payload[field] is None:
+            raise ValueError(f"Missing required field: '{field}' in payload")
 
     # Add processing metadata
     payload["processed_at"] = datetime.utcnow().isoformat() + "Z"
@@ -95,14 +102,17 @@ def lambda_handler(event, context):
     """
     Triggered by Kinesis stream.
     Processes batch of drone telemetry records.
+    Supports ReportBatchItemFailures for resilient processing.
     """
     records = event.get("Records", [])
     log_json("INFO", f"Processing {len(records)} Kinesis records", {"batch_size": len(records)})
 
+    batch_item_failures = []
     success_count = 0
     error_count   = 0
 
     for record in records:
+        sequence_number = record.get("kinesis", {}).get("sequenceNumber")
         try:
             payload = process_record(record)
             s3_key  = store_to_s3(payload)
@@ -117,16 +127,20 @@ def lambda_handler(event, context):
             success_count += 1
 
         except Exception as e:
-            log_json("ERROR", f"Failed to process record: {str(e)}", {"error": str(e)})
+            log_json("ERROR", f"Failed to process record: {str(e)}", {
+                "error": str(e),
+                "sequence_number": sequence_number
+            })
             error_count += 1
+            if sequence_number:
+                batch_item_failures.append({"itemIdentifier": sequence_number})
 
     log_json("INFO", "Batch execution completed", {
         "success_count": success_count,
-        "error_count": error_count
+        "error_count": error_count,
+        "failures_reported": len(batch_item_failures)
     })
 
     return {
-        "statusCode"   : 200,
-        "success_count": success_count,
-        "error_count"  : error_count
+        "batchItemFailures": batch_item_failures
     }
