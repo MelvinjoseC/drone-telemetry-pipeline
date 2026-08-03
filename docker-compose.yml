@@ -1,0 +1,21 @@
+version: '3.8'
+
+services:
+  drone-simulator:
+    build:
+      context: ./device-simulator
+      dockerfile: Dockerfile
+    container_name: drone-simulator
+    environment:
+      - AWS_IOT_ENDPOINT=${AWS_IOT_ENDPOINT:-YOUR_ENDPOINT.iot.us-east-1.amazonaws.com}
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+      - MQTT_TOPIC=${MQTT_TOPIC:-drones/telemetry}
+      - DRONE_ID=${DRONE_ID:-DRONE-001}
+      - SEND_INTERVAL=${SEND_INTERVAL:-2}
+      - SIMULATE_FLIGHT=${SIMULATE_FLIGHT:-true}
+      - START_LAT=${START_LAT:-10.8505}
+      - START_LON=${START_LON:-76.2711}
+    volumes:
+      # Mount certs folder to pass certificates dynamically without image rebuilds
+      - ./device-simulator/certs:/app/certs:ro
+    restart: unless-stopped
