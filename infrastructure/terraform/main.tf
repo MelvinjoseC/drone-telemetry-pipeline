@@ -41,6 +41,41 @@ resource "aws_s3_bucket_public_access_block" "telemetry_privacy" {
   restrict_public_buckets = true
 }
 
+resource "aws_s3_bucket_versioning" "telemetry_versioning" {
+  bucket = aws_s3_bucket.telemetry.id
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "telemetry_encryption" {
+  bucket = aws_s3_bucket.telemetry.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "telemetry_lifecycle" {
+  bucket = aws_s3_bucket.telemetry.id
+
+  rule {
+    id     = "archive-old-telemetry"
+    status = "Enabled"
+
+    transition {
+      days          = 30
+      storage_class = "GLACIER"
+    }
+
+    expiration {
+      days = 90
+    }
+  }
+}
+
 # ── Kinesis Data Stream (Ingestion Stream) ───────
 resource "aws_kinesis_stream" "telemetry_stream" {
   name             = var.kinesis_stream_name
