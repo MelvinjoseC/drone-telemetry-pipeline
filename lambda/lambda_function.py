@@ -43,8 +43,8 @@ S3_BUCKET = os.environ.get("S3_BUCKET", "drone-telemetry-data")
 # ── S3 Key Builder ────────────────────────────────
 def build_s3_key(drone_id, timestamp_str):
     """
-    Build a partitioned S3 path for easy querying.
-    Example: telemetry/2024/01/15/10/DRONE-001_2024-01-15T10:30:00Z.json
+    Build a Hive-compatible partitioned S3 path for easy querying via Athena/Glue.
+    Example: telemetry/year=2024/month=01/day=15/hour=10/DRONE-001_2024-01-15T10-30-00Z.json
     """
     try:
         dt = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
@@ -53,7 +53,7 @@ def build_s3_key(drone_id, timestamp_str):
 
     return (
         f"telemetry/"
-        f"{dt.year}/{dt.month:02d}/{dt.day:02d}/{dt.hour:02d}/"
+        f"year={dt.year}/month={dt.month:02d}/day={dt.day:02d}/hour={dt.hour:02d}/"
         f"{drone_id}_{timestamp_str.replace(':', '-')}.json"
     )
 
