@@ -320,7 +320,7 @@ resource "aws_cloudwatch_metric_alarm" "lambda_errors_alarm" {
   namespace           = "AWS/Lambda"
   period              = 60 # 1 minute
   statistic           = "Sum"
-  threshold           = 0  # Alarm if any error occurs
+  threshold           = 0 # Alarm if any error occurs
   alarm_description   = "This alarm fires if the Lambda telemetry processor fails to execute."
   alarm_actions       = [aws_sns_topic.pipeline_alerts.arn]
 
