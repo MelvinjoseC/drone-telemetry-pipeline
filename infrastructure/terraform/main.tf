@@ -161,6 +161,17 @@ data "archive_file" "lambda_zip" {
   output_path = "${path.module}/lambda_function.zip"
 }
 
+# Explicit CloudWatch Log Group to manage retention
+resource "aws_cloudwatch_log_group" "lambda_log_group" {
+  name              = "/aws/lambda/${var.lambda_function_name}"
+  retention_in_days = var.log_retention_days
+
+  tags = {
+    Environment = var.environment
+    ManagedBy   = "Terraform"
+  }
+}
+
 resource "aws_lambda_function" "telemetry_processor" {
   filename         = data.archive_file.lambda_zip.output_path
   source_code_hash = data.archive_file.lambda_zip.output_base64sha256
@@ -176,6 +187,10 @@ resource "aws_lambda_function" "telemetry_processor" {
     }
   }
 
+  depends_on = [
+    aws_cloudwatch_log_group.lambda_log_group
+  ]
+
   tags = {
     Environment = var.environment
     ManagedBy   = "Terraform"
@@ -184,10 +199,11 @@ resource "aws_lambda_function" "telemetry_processor" {
 
 # Lambda Kinesis Trigger
 resource "aws_lambda_event_source_mapping" "kinesis_trigger" {
-  event_source_arn  = aws_kinesis_stream.telemetry_stream.arn
-  function_name     = aws_lambda_function.telemetry_processor.function_name
-  starting_position = "LATEST"
-  batch_size        = 10
+  event_source_arn        = aws_kinesis_stream.telemetry_stream.arn
+  function_name           = aws_lambda_function.telemetry_processor.function_name
+  starting_position       = "LATEST"
+  batch_size              = 10
+  function_response_types = ["ReportBatchItemFailures"]
 }
 
 # ── AWS IoT Core (Device Connection) ─────────────
