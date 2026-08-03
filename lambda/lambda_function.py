@@ -11,6 +11,7 @@ Author  : Melvin Chacko Jose
 ────────────────────────────────────────────────────────
 """
 
+import os
 import json
 import boto3
 import base64
@@ -21,10 +22,23 @@ from datetime import datetime
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-# ── AWS Clients ───────────────────────────────────
-s3 = boto3.client("s3", region_name="us-east-1")
+def log_json(level, message, extra=None):
+    """Output structured JSON log to stdout for CloudWatch ingestion."""
+    record = {
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "level": level.upper(),
+        "message": message
+    }
+    if extra:
+        record.update(extra)
+    print(json.dumps(record))
 
-S3_BUCKET = "drone-telemetry-data"
+# ── AWS Clients ───────────────────────────────────
+AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
+s3 = boto3.client("s3", region_name=AWS_REGION)
+
+# Read S3 bucket name from environment variable
+S3_BUCKET = os.environ.get("S3_BUCKET", "drone-telemetry-data")
 
 # ── S3 Key Builder ────────────────────────────────
 def build_s3_key(drone_id, timestamp_str):
@@ -83,7 +97,7 @@ def lambda_handler(event, context):
     Processes batch of drone telemetry records.
     """
     records = event.get("Records", [])
-    logger.info(f"Processing {len(records)} Kinesis records")
+    log_json("INFO", f"Processing {len(records)} Kinesis records", {"batch_size": len(records)})
 
     success_count = 0
     error_count   = 0
@@ -93,20 +107,23 @@ def lambda_handler(event, context):
             payload = process_record(record)
             s3_key  = store_to_s3(payload)
 
-            logger.info(
-                f"✅ Stored: {payload['drone_id']} | "
-                f"Alt={payload['altitude_m']}m | "
-                f"Speed={payload['speed_kmh']}km/h | "
-                f"Battery={payload['battery_pct']}% | "
-                f"S3: {s3_key}"
-            )
+            log_json("INFO", "Telemetry record processed and stored successfully", {
+                "drone_id": payload["drone_id"],
+                "altitude_m": payload["altitude_m"],
+                "speed_kmh": payload["speed_kmh"],
+                "battery_pct": payload["battery_pct"],
+                "s3_key": s3_key
+            })
             success_count += 1
 
         except Exception as e:
-            logger.error(f"❌ Failed to process record: {e}")
+            log_json("ERROR", f"Failed to process record: {str(e)}", {"error": str(e)})
             error_count += 1
 
-    logger.info(f"Batch complete: {success_count} success, {error_count} errors")
+    log_json("INFO", "Batch execution completed", {
+        "success_count": success_count,
+        "error_count": error_count
+    })
 
     return {
         "statusCode"   : 200,
