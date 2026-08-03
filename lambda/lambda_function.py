@@ -16,7 +16,7 @@ import json
 import boto3
 import base64
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 # ── Logging ───────────────────────────────────────
 logger = logging.getLogger()
@@ -25,7 +25,7 @@ logger.setLevel(logging.INFO)
 def log_json(level, message, extra=None):
     """Output structured JSON log to stdout for CloudWatch ingestion."""
     record = {
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "level": level.upper(),
         "message": message
     }
@@ -49,7 +49,7 @@ def build_s3_key(drone_id, timestamp_str):
     try:
         dt = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
     except Exception:
-        dt = datetime.utcnow()
+        dt = datetime.now(timezone.utc)
 
     return (
         f"telemetry/"
@@ -78,7 +78,7 @@ def process_record(record):
             raise ValueError(f"Missing required field: '{field}' in payload")
 
     # Add processing metadata
-    payload["processed_at"] = datetime.utcnow().isoformat() + "Z"
+    payload["processed_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     payload["source"]       = "kinesis-lambda-pipeline"
 
     return payload

@@ -81,7 +81,7 @@ class DroneSimulator:
 
         return {
             "drone_id"    : DRONE_ID,
-            "timestamp"   : datetime.datetime.utcnow().isoformat() + "Z",
+            "timestamp"   : datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
             "latitude"    : round(self.lat, 6),
             "longitude"   : round(self.lon, 6),
             "altitude_m"  : round(self.altitude, 2),
