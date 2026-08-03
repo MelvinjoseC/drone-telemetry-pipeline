@@ -1,53 +1,64 @@
-# 🚁 Drone Telemetry Data Pipeline — AWS Cloud
+# 🚁 Production-Grade Drone Telemetry Data Pipeline — AWS Cloud
 
-A production-style IoT data pipeline that streams **live drone telemetry** (GPS, altitude, speed, battery) to AWS Cloud for real-time processing, storage, and visualization.
+A high-performance, containerized, and production-ready IoT data pipeline that streams **live drone telemetry** (GPS, altitude, speed, battery) to AWS Cloud for real-time processing, storage, and analytics. 
+
+This repository represents an enterprise-grade refactor incorporating modern DevOps practices, security hardening, robust error handling, Infrastructure as Code (IaC), and fully-featured CI/CD pipelines.
 
 ---
 
-## 📐 Architecture
+## 📐 Architecture & Telemetry Data Flow
 
 ```
-[Raspberry Pi / Simulator]
-  Drone Telemetry Data
-  (GPS, Altitude, Speed, Battery)
-        |
-        | MQTT (port 8883)
-        ↓
-[AWS IoT Core]
-        |
-        | IoT Rule → Kinesis
-        ↓
-[Kinesis Data Streams]
-        |
-        | triggers
-        ↓
-[AWS Lambda]
-        |
-        | stores processed data
-        ↓
-[AWS S3 Bucket]
-        |
-        | data source
-        ↓
-[AWS QuickSight Dashboard]
-
-      +
-[CloudWatch] ← monitors Lambda & Kinesis
+[Drone Simulator (Docker)]
+         │
+         │ MQTT via TLS (port 8883)
+         ▼
+  [AWS IoT Core]
+         │
+         │ IoT Topic Rule ($drone_id Partition Key)
+         ▼
+[Kinesis Data Streams (KMS Encrypted)]
+         │
+         │ triggers (ReportBatchItemFailures)
+         ▼
+    [AWS Lambda] ──(Structured JSON logs)──► [CloudWatch Log Group (14-day retention)]
+         │
+         │ stores Hive-partitioned files
+         ▼
+[AWS S3 Bucket (SSE-KMS Encryption, Versioned, Lifecycle Policies)]
+         │
+         │ data source
+         ▼
+[AWS QuickSight / Athena]
 ```
 
 ---
 
-## 🛠️ AWS Services Used
+## 🚀 Key Production Overhaul Enhancements
 
-| Service | Purpose |
-|---|---|
-| AWS IoT Core | Receives MQTT telemetry from drone/Pi |
-| Kinesis Data Streams | Real-time data stream ingestion |
-| AWS Lambda | Processes & transforms telemetry data |
-| AWS S3 | Stores processed telemetry as JSON/CSV |
-| AWS QuickSight | Visualizes drone flight data |
-| AWS CloudWatch | Monitors pipeline health |
-| AWS IAM | Roles and permissions |
+As part of transforming this into an enterprise-ready DevOps implementation, the following updates were made:
+
+### 1. 🐳 Containerization & Easy Local Development
+- **Dockerfile**: Added a lightweight, multi-stage-friendly `Dockerfile` based on `python:3.11-slim`.
+- **Docker Compose**: Pre-configured `docker-compose.yml` to launch the simulator with custom credentials, variables, and mounted local certificate folder.
+- **Environment variables**: Migrated all hardcoded values in the simulator's `config.py` to support env-based configuration and automatic `.env` loading.
+
+### 2. ⚡ Resilient & Cost-Efficient AWS Lambda
+- **Structured JSON Logging**: Implemented JSON structured logging format, making logs immediately searchable and parseable in CloudWatch Log Insights.
+- **Hive-Compatible Partitioning**: Changed file keys to `telemetry/year=YYYY/month=MM/day=DD/hour=HH/...`, allowing seamless data cataloging via AWS Glue and ultra-fast SQL queries in Athena.
+- **Batch Error Resiliency**: Configured `ReportBatchItemFailures` inside the Kinesis event consumer. If a single telemetry record fails, only that record is retried by Kinesis, preventing pipeline blockage and saving computation costs.
+- **Zero Hardcoding**: Dynamically loads configuration (S3 buckets, regions) via environment variables.
+
+### 3. 🛡️ Hardened Infrastructure as Code (IaC)
+- **S3 Security**: Enforced versioning, blocked all public access, configured default AES256 server-side encryption, and created a 90-day expiration/30-day Glacier transition lifecycle policy.
+- **Kinesis Encryption**: Enabled server-side encryption for the Kinesis Data Stream using AWS KMS.
+- **Log Management**: Explicitly declared CloudWatch Log Groups for the Lambda function with a 14-day retention limit to control storage costs.
+- **Real-Time Monitoring**: Deployed CloudWatch alarms for Lambda errors and Kinesis stream throttles, publishing alerts to an SNS Topic.
+
+### 4. 👷 Modern CI/CD Pipeline
+- **Upgraded Actions**: Migrated the workflows to v4/v5 GitHub Actions.
+- **Linting & Code Quality**: Replaced `flake8` with **Ruff** for blazingly fast Python linting and styling checks.
+- **IaC Security Scanning**: Integrated **Trivy** directly into the GitHub Actions flow to check for misconfigurations and security vulnerabilities before infrastructure changes are applied.
 
 ---
 
@@ -56,84 +67,47 @@ A production-style IoT data pipeline that streams **live drone telemetry** (GPS,
 ```
 drone-telemetry-pipeline/
 │
+├── .github/workflows/
+│   └── ci.yml                  # GitHub Actions pipeline (Ruff + Trivy + Tests)
+│
 ├── device-simulator/
-│   ├── drone_publisher.py     # Simulates & sends drone telemetry
-│   ├── config.py              # AWS IoT configuration
-│   ├── requirements.txt
-│   └── certs/                 # Place AWS IoT certs here
+│   ├── Dockerfile              # Docker recipe for simulator run
+│   ├── config.py               # Env-based simulator configurations
+│   ├── drone_publisher.py      # Telemetry publisher (Paho-MQTT client)
+│   ├── requirements.txt        # Python dependencies
+│   └── certs/                  # Place AWS IoT certificate credentials here
 │
 ├── lambda/
-│   ├── lambda_function.py     # Processes Kinesis stream → S3
-│   └── requirements.txt
+│   └── lambda_function.py      # Resilient Kinesis-S3 event processor
 │
 ├── infrastructure/
-│   └── aws_setup_guide.md     # Step-by-step AWS setup
+│   ├── aws_setup_guide.md      # Terraform & Docker deployment guide
+│   └── terraform/              # Terraform scripts (main, variables, outputs)
 │
-└── docs/
-    └── architecture.md        # Detailed architecture
+├── tests/
+│   ├── test_lambda.py          # Lambda function unit tests
+│   └── test_simulator.py       # Simulator unit tests
+│
+├── docker-compose.yml          # Local container run setup
+└── README.md                   # Project description
 ```
 
 ---
 
-## 🚀 Quick Start
+## ⚡ Quick Start
 
-### Step 1 — Set up AWS
-```
-Follow infrastructure/aws_setup_guide.md
-```
+For detailed step-by-step setup instructions, please consult the [AWS Deployment & Operations Guide](file:///c:/Users/User/Desktop/DRONE%20TELEMETRY/infrastructure/aws_setup_guide.md).
 
-### Step 2 — Run Drone Simulator (Raspberry Pi or PC)
 ```bash
-cd device-simulator
-pip install -r requirements.txt
-# Add AWS certs to device-simulator/certs/
-# Edit config.py with your endpoint
-python drone_publisher.py
+# Clone the repository
+git clone https://github.com/MelvinjoseC/drone-telemetry-pipeline.git
+cd drone-telemetry-pipeline
+
+# Run local test suite
+python -m unittest discover -s tests
 ```
-
-### Step 3 — View Data
-- **S3**: AWS Console → S3 → your bucket → telemetry files
-- **QuickSight**: Connect to S3 and build flight dashboard
-
----
-
-## 📊 Telemetry Data Format
-
-```json
-{
-  "drone_id"    : "DRONE-001",
-  "timestamp"   : "2024-01-15T10:30:00Z",
-  "latitude"    : 10.8505,
-  "longitude"   : 76.2711,
-  "altitude_m"  : 120.5,
-  "speed_kmh"   : 45.2,
-  "heading_deg" : 270.0,
-  "battery_pct" : 78,
-  "flight_mode" : "AUTO",
-  "status"      : "flying"
-}
-```
-
----
-
-## 🔧 Hardware / Run Options
-
-| Option | How |
-|---|---|
-| Raspberry Pi | Run `drone_publisher.py` on Pi |
-| Laptop/PC | Run simulator on any Python machine |
-| ESP32 | Use MicroPython version (coming soon) |
-
----
-
-## 👤 Author
-
-**Melvin Chacko Jose**
-- Email: melvinjose025@gmail.com
-
-> 💡 This project is inspired by real-world R&D work integrating drone telemetry data with AWS cloud infrastructure.
 
 ---
 
 ## 📄 License
-MIT License
+This project is licensed under the MIT License.
