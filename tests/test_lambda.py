@@ -4,7 +4,6 @@ import json
 import base64
 import unittest
 from unittest.mock import MagicMock, patch
-from datetime import datetime
 
 # Add lambda directory to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../lambda')))
@@ -14,13 +13,13 @@ import lambda_function
 class TestLambdaFunction(unittest.TestCase):
 
     def test_build_s3_key(self):
-        # Test standard ISO timestamp parsing
+        # Test standard ISO timestamp parsing (Hive partition style)
         key = lambda_function.build_s3_key("DRONE-001", "2024-01-15T10:30:00Z")
-        self.assertEqual(key, "telemetry/2024/01/15/10/DRONE-001_2024-01-15T10-30-00Z.json")
+        self.assertEqual(key, "telemetry/year=2024/month=01/day=15/hour=10/DRONE-001_2024-01-15T10-30-00Z.json")
 
         # Test fallback on invalid timestamp
         key_fallback = lambda_function.build_s3_key("DRONE-001", "invalid-time")
-        self.assertTrue(key_fallback.startswith("telemetry/"))
+        self.assertTrue(key_fallback.startswith("telemetry/year="))
         self.assertTrue(key_fallback.endswith(".json"))
 
     def test_process_record_success(self):
@@ -82,8 +81,8 @@ class TestLambdaFunction(unittest.TestCase):
             "battery_pct": 78
         }
         
+        # Test default bucket name config
         key = lambda_function.store_to_s3(payload)
-        
         mock_s3.put_object.assert_called_once()
         call_kwargs = mock_s3.put_object.call_args[1]
         self.assertEqual(call_kwargs["Bucket"], "drone-telemetry-data")
@@ -101,22 +100,26 @@ class TestLambdaFunction(unittest.TestCase):
             
             event = {
                 "Records": [
-                    {"kinesis": {"data": "dummy1"}},
-                    {"kinesis": {"data": "dummy2"}}
+                    {"kinesis": {"data": "dummy1", "sequenceNumber": "seq1"}},
+                    {"kinesis": {"data": "dummy2", "sequenceNumber": "seq2"}}
                 ]
             }
             
             result = lambda_function.lambda_handler(event, None)
             
-            self.assertEqual(result["statusCode"], 200)
-            self.assertEqual(result["success_count"], 2)
-            self.assertEqual(result["error_count"], 0)
+            # Verify batchItemFailures is empty for success
+            self.assertEqual(result["batchItemFailures"], [])
+            self.assertEqual(lambda_function.process_record.call_count, 2)
+            self.assertEqual(lambda_function.store_to_s3.call_count, 2)
 
             # Test failure case
             lambda_function.process_record.side_effect = Exception("Mock Error")
             result_error = lambda_function.lambda_handler(event, None)
-            self.assertEqual(result_error["success_count"], 0)
-            self.assertEqual(result_error["error_count"], 2)
+            
+            # Verify batchItemFailures returns the failed sequences
+            self.assertEqual(len(result_error["batchItemFailures"]), 2)
+            self.assertEqual(result_error["batchItemFailures"][0]["itemIdentifier"], "seq1")
+            self.assertEqual(result_error["batchItemFailures"][1]["itemIdentifier"], "seq2")
             
         finally:
             # Restore original state
