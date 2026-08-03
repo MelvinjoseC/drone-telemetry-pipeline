@@ -81,6 +81,8 @@ resource "aws_kinesis_stream" "telemetry_stream" {
   name             = var.kinesis_stream_name
   shard_count      = var.environment == "prod" ? 2 : 1 # Shard count for dev/prod
   retention_period = 24
+  encryption_type  = "KMS"
+  kms_key_id       = "alias/aws/kinesis"
 
   stream_mode_details {
     stream_mode = "ON_DEMAND"
