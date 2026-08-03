@@ -1,152 +1,118 @@
-# ☁️ AWS Setup Guide — Drone Telemetry Pipeline
+# ☁️ AWS Deployment & Operations Guide — Drone Telemetry Pipeline
 
-Follow these steps in order. Takes about 45–60 minutes.
-
----
-
-## Step 1 — Create S3 Bucket
-
-1. Go to **AWS Console → S3 → Create Bucket**
-2. Bucket name: `drone-telemetry-data` (must be globally unique — add your name e.g. `drone-telemetry-melvin`)
-3. Region: `us-east-1`
-4. Block all public access: ✅ Keep checked
-5. Click **Create Bucket**
+This guide outlines how to provision and operate the production-ready Drone Telemetry Pipeline using **Terraform (Infrastructure as Code)**, **Docker**, and **Docker Compose**.
 
 ---
 
-## Step 2 — Create Kinesis Data Stream
-
-1. Go to **AWS Console → Kinesis → Data Streams → Create**
-2. Stream name: `DroneDataStream`
-3. Capacity mode: **On-demand** (free tier friendly)
-4. Click **Create**
-
----
-
-## Step 3 — Create IAM Role for Lambda
-
-1. Go to **IAM → Roles → Create Role**
-2. Trusted entity: **AWS Service → Lambda**
-3. Add permissions:
-   - `AmazonS3FullAccess`
-   - `AWSLambdaKinesisExecutionRole`
-   - `AWSLambdaBasicExecutionRole`
-   - `AWSIoTFullAccess`
-4. Role name: `drone-lambda-role`
-5. Click **Create**
+## 🛠️ Prerequisites
+Before starting, ensure you have the following installed:
+- [AWS CLI](https://aws.amazon.com/cli/) (configured with administrator credentials)
+- [Terraform](https://www.terraform.io/) (v1.6.0+)
+- [Docker](https://www.docker.com/) and [Docker Compose](https://docs.docker.com/compose/)
 
 ---
 
-## Step 4 — Create Lambda Function
+## 🚀 Step 1 — Automated Resource Provisioning via Terraform
 
-1. Go to **Lambda → Create Function**
-2. Name: `DroneTelemetryProcessor`
-3. Runtime: **Python 3.11**
-4. Execution role: `drone-lambda-role`
-5. Click **Create Function**
-6. Paste code from `lambda/lambda_function.py`
-7. Update `S3_BUCKET` variable with your actual bucket name
-8. Click **Deploy**
+Instead of manually creating AWS services, provision the entire architecture securely using Terraform:
 
-### Add Kinesis Trigger to Lambda
-1. In Lambda → click **Add Trigger**
-2. Source: **Kinesis**
-3. Stream: `DroneDataStream`
-4. Batch size: `10`
-5. Starting position: **Latest**
-6. Click **Add**
+1. Navigate to the Terraform directory:
+   ```bash
+   cd infrastructure/terraform
+   ```
 
----
+2. Initialize Terraform and download providers:
+   ```bash
+   terraform init
+   ```
 
-## Step 5 — Set Up AWS IoT Core
+3. Plan the deployment to verify the resources that will be created:
+   ```bash
+   terraform plan -var="s3_bucket_name=drone-telemetry-melvin" -var="alert_email=your-email@example.com"
+   ```
+   > [!TIP]
+   > Replace `drone-telemetry-melvin` with a globally unique bucket name. Enter a valid email address under `alert_email` to receive CloudWatch monitoring alerts.
 
-### 5a — Create IoT Thing
-1. Go to **IoT Core → Manage → Things → Create Thing**
-2. Name: `DRONE-001`
-3. Auto-generate certificate → Next
-4. **Download all certificates** → put in `device-simulator/certs/`
+4. Apply the configuration to deploy the infrastructure to AWS:
+   ```bash
+   terraform apply -var="s3_bucket_name=drone-telemetry-melvin" -var="alert_email=your-email@example.com" -auto-approve
+   ```
 
-### 5b — Create IoT Policy
-1. **IoT Core → Security → Policies → Create**
-2. Name: `DroneDevicePolicy`
-3. JSON:
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": ["iot:Connect", "iot:Publish", "iot:Subscribe", "iot:Receive"],
-      "Resource": "*"
-    }
-  ]
-}
-```
-
-### 5c — Create IoT Rule (IoT Core → Kinesis)
-1. **IoT Core → Message Routing → Rules → Create**
-2. Name: `DroneToKinesis`
-3. SQL:
-```sql
-SELECT * FROM 'drones/telemetry'
-```
-4. Action: **Kinesis Data Streams**
-5. Stream: `DroneDataStream`
-6. Partition key: `${drone_id}`
-7. Create new IAM role for this rule
-8. Click **Create**
-
-### 5d — Get IoT Endpoint
-1. **IoT Core → Settings**
-2. Copy **Device data endpoint**
-3. Paste into `device-simulator/config.py`
+5. Note down the outputs from Terraform:
+   - S3 Bucket Name & Kinesis Stream Name
+   - Lambda Function Name
+   - IoT Thing Name (`DRONE-001`)
+   - SNS Topic ARN (for pipeline alerts)
 
 ---
 
-## Step 6 — Connect QuickSight to S3
+## 🔑 Step 2 — AWS IoT Device Certificates Setup
 
-1. Go to **AWS QuickSight → New Dataset → S3**
-2. Connect to your `drone-telemetry-data` bucket
-3. Build charts:
-   - **Line chart**: timestamp vs altitude
-   - **Line chart**: timestamp vs speed
-   - **Map**: latitude/longitude flight path
-   - **Gauge**: battery percentage
+Because AWS IoT requires certificate-based mutual TLS (mTLS), you must generate and register device credentials:
+
+1. Open the **AWS Console → IoT Core → Manage → All devices → Things**.
+2. Click on the Terraform-created IoT Thing `DRONE-001`.
+3. Go to the **Certificates** tab and click **Create certificate** (or generate one manually using `aws iot create-keys-and-certificate`).
+4. **Download all generated certificate files**:
+   - Device Certificate (`device-certificate.pem.crt`)
+   - Private Key File (`private.pem.key`)
+   - Amazon Root CA 1 (`AmazonRootCA1.pem` - from AWS CA downloads page)
+5. Place these files inside the simulator's certificates directory:
+   ```
+   device-simulator/certs/
+   ├── AmazonRootCA1.pem
+   ├── device-certificate.pem.crt
+   └── private.pem.key
+   ```
+6. **Activate the certificate** in AWS Console and attach the Terraform-created policy (`DroneDevicePolicy`) to the certificate.
 
 ---
 
-## Step 7 — Run the Simulator
+## 🐳 Step 3 — Run the Simulator via Docker Compose
+
+Once the certificates are in place, spin up the simulator without needing to configure local Python environments:
+
+1. Create a `.env` file in the root directory:
+   ```env
+   AWS_IOT_ENDPOINT=your-endpoint.iot.us-east-1.amazonaws.com
+   AWS_REGION=us-east-1
+   MQTT_TOPIC=drones/telemetry
+   DRONE_ID=DRONE-001
+   SEND_INTERVAL=2
+   SIMULATE_FLIGHT=true
+   ```
+   *(Retrieve your IoT endpoint via AWS Console → IoT Core → Settings → Device data endpoint)*
+
+2. Start the simulator container in the background:
+   ```bash
+   docker compose up --build -d
+   ```
+
+3. View live flight telemetry logs:
+   ```bash
+   docker compose logs -f drone-simulator
+   ```
+
+4. To stop the simulator:
+   ```bash
+   docker compose down
+   ```
+
+---
+
+## 📊 Step 4 — Visualizing Data with AWS QuickSight
+
+1. Connect **S3** to **AWS QuickSight** as a datasource.
+2. Point QuickSight to the partitioned data path: `s3://<your-bucket>/telemetry/`.
+3. Create dashboards mapping GPS coordinates, flight paths, battery depletion rates, and speed.
+
+---
+
+## 🗑️ Tear Down Infrastructure
+
+When finished testing, prevent ongoing AWS charges by destroying all provisioned resources:
 
 ```bash
-cd device-simulator
-pip install -r requirements.txt
-python drone_publisher.py
+cd infrastructure/terraform
+terraform destroy -var="s3_bucket_name=drone-telemetry-melvin" -auto-approve
 ```
-
----
-
-## ✅ Verify Pipeline
-
-```
-drone_publisher.py runs
-→ IoT Core receives MQTT messages
-→ IoT Rule forwards to Kinesis
-→ Kinesis triggers Lambda
-→ Lambda stores JSON to S3
-→ QuickSight shows flight data
-→ CloudWatch shows Lambda metrics
-```
-
----
-
-## 💰 Cost Estimate (Free Tier)
-
-| Service | Free Tier |
-|---|---|
-| IoT Core | 250K messages/month |
-| Kinesis | 1 shard × 1 month free |
-| Lambda | 1M requests/month |
-| S3 | 5 GB storage free |
-| QuickSight | 1 user free for 30 days |
-
-**Total cost: ~$0** within free tier ✅
