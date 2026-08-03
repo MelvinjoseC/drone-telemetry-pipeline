@@ -43,3 +43,9 @@ variable "log_retention_days" {
   description = "Number of days to retain CloudWatch logs for the Lambda function"
   default     = 14
 }
+
+variable "alert_email" {
+  type        = string
+  description = "Email address to send pipeline alerts to. If empty, subscription is skipped."
+  default     = ""
+}

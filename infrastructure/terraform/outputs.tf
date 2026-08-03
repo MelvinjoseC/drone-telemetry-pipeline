@@ -46,3 +46,8 @@ output "iot_rule_name" {
   value       = aws_iot_topic_rule.drone_to_kinesis.name
   description = "Name of the IoT Core routing rule"
 }
+
+output "sns_topic_arn" {
+  value       = aws_sns_topic.pipeline_alerts.arn
+  description = "ARN of the SNS topic used for pipeline monitoring alarms"
+}

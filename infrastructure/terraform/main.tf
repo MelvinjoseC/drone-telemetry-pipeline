@@ -289,3 +289,72 @@ resource "aws_iot_topic_rule" "drone_to_kinesis" {
     partition_key = "$${drone_id}" # Escaped for Terraform
   }
 }
+
+# ── Monitoring & Alerts ──────────────────────────
+
+# SNS Topic for alerts
+resource "aws_sns_topic" "pipeline_alerts" {
+  name = "drone-pipeline-alerts-topic"
+
+  tags = {
+    Environment = var.environment
+    ManagedBy   = "Terraform"
+    Project     = "Drone-Telemetry"
+  }
+}
+
+# Email subscription if alert_email is configured
+resource "aws_sns_topic_subscription" "email_sub" {
+  count     = var.alert_email != "" ? 1 : 0
+  topic_arn = aws_sns_topic.pipeline_alerts.arn
+  protocol  = "email"
+  endpoint  = var.alert_email
+}
+
+# Lambda Error Alarm
+resource "aws_cloudwatch_metric_alarm" "lambda_errors_alarm" {
+  alarm_name          = "drone-lambda-errors-alarm"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "Errors"
+  namespace           = "AWS/Lambda"
+  period              = 60 # 1 minute
+  statistic           = "Sum"
+  threshold           = 0  # Alarm if any error occurs
+  alarm_description   = "This alarm fires if the Lambda telemetry processor fails to execute."
+  alarm_actions       = [aws_sns_topic.pipeline_alerts.arn]
+
+  dimensions = {
+    FunctionName = aws_lambda_function.telemetry_processor.function_name
+  }
+
+  tags = {
+    Environment = var.environment
+    ManagedBy   = "Terraform"
+    Project     = "Drone-Telemetry"
+  }
+}
+
+# Kinesis Throttles Alarm
+resource "aws_cloudwatch_metric_alarm" "kinesis_throttles_alarm" {
+  alarm_name          = "drone-kinesis-throttles-alarm"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "ReadProvisionedThroughputExceeded"
+  namespace           = "AWS/Kinesis"
+  period              = 60
+  statistic           = "Sum"
+  threshold           = 0
+  alarm_description   = "This alarm fires if the Kinesis telemetry stream read throughput is exceeded."
+  alarm_actions       = [aws_sns_topic.pipeline_alerts.arn]
+
+  dimensions = {
+    StreamName = aws_kinesis_stream.telemetry_stream.name
+  }
+
+  tags = {
+    Environment = var.environment
+    ManagedBy   = "Terraform"
+    Project     = "Drone-Telemetry"
+  }
+}
