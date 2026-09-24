@@ -71,3 +71,8 @@ output "cloudwatch_dashboard_name" {
   value       = aws_cloudwatch_dashboard.pipeline_dashboard.dashboard_name
   description = "Name of the operational CloudWatch dashboard for pipeline monitoring"
 }
+
+output "access_logs_bucket_name" {
+  value       = aws_s3_bucket.access_logs.id
+  description = "Name of the S3 bucket storing server access logs for compliance"
+}

@@ -78,6 +78,44 @@ resource "aws_s3_bucket_lifecycle_configuration" "telemetry_lifecycle" {
   }
 }
 
+# ── S3 Server Access Logs Bucket ──────────────────
+resource "aws_s3_bucket" "access_logs" {
+  bucket        = "${var.s3_bucket_name}-logs"
+  force_destroy = true
+
+  tags = {
+    Environment = var.environment
+    ManagedBy   = "Terraform"
+    Project     = "Drone-Telemetry"
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "access_logs_privacy" {
+  bucket = aws_s3_bucket.access_logs.id
+
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "access_logs_encryption" {
+  bucket = aws_s3_bucket.access_logs.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+resource "aws_s3_bucket_logging" "telemetry_logging" {
+  bucket = aws_s3_bucket.telemetry.id
+
+  target_bucket = aws_s3_bucket.access_logs.id
+  target_prefix = "access-logs/"
+}
+
 # ── Kinesis Data Stream (Ingestion Stream) ───────
 resource "aws_kinesis_stream" "telemetry_stream" {
   name             = var.kinesis_stream_name
@@ -123,7 +161,7 @@ resource "aws_iam_role" "lambda_role" {
 # S3 Policy for Lambda
 resource "aws_iam_policy" "lambda_s3_policy" {
   name        = "drone-lambda-s3-policy"
-  description = "Allows Lambda to write processed drone telemetry to S3"
+  description = "Allows Lambda to write telemetry and dead-letter records to S3 with least privilege"
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -131,9 +169,20 @@ resource "aws_iam_policy" "lambda_s3_policy" {
       {
         Effect = "Allow"
         Action = [
-          "s3:PutObject"
+          "s3:PutObject",
+          "s3:GetObject"
         ]
-        Resource = "${aws_s3_bucket.telemetry.arn}/*"
+        Resource = [
+          "${aws_s3_bucket.telemetry.arn}/telemetry/*",
+          "${aws_s3_bucket.telemetry.arn}/dead-letter/*"
+        ]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:ListBucket"
+        ]
+        Resource = aws_s3_bucket.telemetry.arn
       }
     ]
   })
