@@ -41,6 +41,11 @@ from config import (
     START_LAT,
     START_LON,
 )
+from scenarios import (
+    WaypointNavigator,
+    build_delivery_mission,
+    build_perimeter_patrol,
+)
 
 
 # ── Flight simulation state ───────────────────────
@@ -51,6 +56,7 @@ class DroneSimulator:
         start_lat: float = START_LAT,
         start_lon: float = START_LON,
         tick_offset: int = 0,
+        scenario: Optional[str] = None,
     ):
         self.drone_id = drone_id
         self.lat = start_lat
@@ -61,44 +67,78 @@ class DroneSimulator:
         self.battery = 100.0  # percentage
         self.flight_mode = "TAKEOFF"
         self.tick = tick_offset
+        self.scenario = scenario
+
+        if scenario == "patrol":
+            self.navigator = WaypointNavigator(
+                build_perimeter_patrol(self.lat, self.lon)
+            )
+        elif scenario == "delivery":
+            self.navigator = WaypointNavigator(
+                build_delivery_mission(self.lat, self.lon)
+            )
+        else:
+            self.navigator = None
 
     def update(self) -> dict:
         """Simulate realistic drone flight parameters."""
         self.tick += 1
 
-        # ── Flight phases ─────────────────────────
-        if self.tick <= 5:
-            # Takeoff phase
-            self.flight_mode = "TAKEOFF"
-            self.altitude = min(self.altitude + 20.0, 100.0)
-            self.speed = min(self.speed + 5.0, 20.0)
+        if self.navigator:
+            new_lat, new_lon, new_alt, new_spd, new_hdg, finished = self.navigator.step(
+                self.lat, self.lon, self.altitude, interval_seconds=2.0
+            )
+            self.lat = new_lat
+            self.lon = new_lon
+            self.altitude = new_alt
+            self.speed = new_spd
+            self.heading = new_hdg
 
-        elif self.tick <= 50:
-            # Cruise phase — moving in a pattern
-            self.flight_mode = "AUTO"
-            self.altitude = 100.0 + random.uniform(-5.0, 5.0)
-            self.speed = 45.0 + random.uniform(-5.0, 5.0)
-            self.heading = (self.tick * 7.0) % 360.0
+            if self.altitude <= 0.5 and finished:
+                self.flight_mode = "LANDED"
+            elif self.speed > 25.0:
+                self.flight_mode = "AUTO"
+            else:
+                self.flight_mode = "TAKEOFF"
 
-            # Move GPS position
-            rad = math.radians(self.heading)
-            self.lat += math.cos(rad) * 0.0001
-            self.lon += math.sin(rad) * 0.0001
-
-        elif self.tick <= 60:
-            # Landing phase
-            self.flight_mode = "LANDING"
-            self.altitude = max(self.altitude - 10.0, 0.0)
-            self.speed = max(self.speed - 5.0, 0.0)
-
+            if finished:
+                print(
+                    f"\n[MISSION COMPLETE] [{self.drone_id}] Waypoint mission completed!\n"
+                )
         else:
-            # Reset for next loop
-            self.tick = 0
-            self.battery = 100.0
-            self.altitude = 0.0
-            self.speed = 0.0
-            self.flight_mode = "TAKEOFF"
-            print(f"\n[CYCLE] [{self.drone_id}] New flight cycle started!\n")
+            # ── Standard flight phases ────────────────
+            if self.tick <= 5:
+                # Takeoff phase
+                self.flight_mode = "TAKEOFF"
+                self.altitude = min(self.altitude + 20.0, 100.0)
+                self.speed = min(self.speed + 5.0, 20.0)
+
+            elif self.tick <= 50:
+                # Cruise phase — moving in a pattern
+                self.flight_mode = "AUTO"
+                self.altitude = 100.0 + random.uniform(-5.0, 5.0)
+                self.speed = 45.0 + random.uniform(-5.0, 5.0)
+                self.heading = (self.tick * 7.0) % 360.0
+
+                # Move GPS position
+                rad = math.radians(self.heading)
+                self.lat += math.cos(rad) * 0.0001
+                self.lon += math.sin(rad) * 0.0001
+
+            elif self.tick <= 60:
+                # Landing phase
+                self.flight_mode = "LANDING"
+                self.altitude = max(self.altitude - 10.0, 0.0)
+                self.speed = max(self.speed - 5.0, 0.0)
+
+            else:
+                # Reset for next loop
+                self.tick = 0
+                self.battery = 100.0
+                self.altitude = 0.0
+                self.speed = 0.0
+                self.flight_mode = "TAKEOFF"
+                print(f"\n[CYCLE] [{self.drone_id}] New flight cycle started!\n")
 
         # ── Battery drain ─────────────────────────
         if self.flight_mode != "TAKEOFF":
@@ -130,6 +170,7 @@ class FleetSimulator:
         fleet_size: int = 1,
         start_lat: float = START_LAT,
         start_lon: float = START_LON,
+        scenario: Optional[str] = None,
     ):
         if drone_ids and len(drone_ids) > 0:
             self.drones = [
@@ -138,6 +179,7 @@ class FleetSimulator:
                     start_lat=start_lat + (i * 0.002),
                     start_lon=start_lon + (i * 0.002),
                     tick_offset=i * 3,
+                    scenario=scenario,
                 )
                 for i, d_id in enumerate(drone_ids)
             ]
@@ -148,6 +190,7 @@ class FleetSimulator:
                     start_lat=start_lat + (i * 0.002),
                     start_lon=start_lon + (i * 0.002),
                     tick_offset=i * 3,
+                    scenario=scenario,
                 )
                 for i in range(max(1, fleet_size))
             ]
@@ -223,6 +266,13 @@ def parse_args():
         help="Simulate telemetry output without connecting to AWS IoT Core",
     )
     parser.add_argument(
+        "--scenario",
+        type=str,
+        choices=["default", "patrol", "delivery"],
+        default="default",
+        help="Flight mission profile (default, patrol, delivery)",
+    )
+    parser.add_argument(
         "--max-ticks",
         type=int,
         default=0,
@@ -242,6 +292,7 @@ def main():
     fleet = FleetSimulator(
         drone_ids=drone_ids,
         fleet_size=args.fleet_size,
+        scenario=args.scenario if args.scenario != "default" else None,
     )
 
     print("[INFO] Drone Telemetry Publisher Starting...")
