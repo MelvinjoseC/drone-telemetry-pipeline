@@ -1,6 +1,7 @@
 version: '3.8'
 
 services:
+  # Drone Device Simulator
   drone-simulator:
     build:
       context: ./device-simulator
@@ -11,6 +12,7 @@ services:
       - AWS_REGION=${AWS_REGION:-us-east-1}
       - MQTT_TOPIC=${MQTT_TOPIC:-drones/telemetry}
       - DRONE_ID=${DRONE_ID:-DRONE-001}
+      - FLEET_SIZE=${FLEET_SIZE:-1}
       - SEND_INTERVAL=${SEND_INTERVAL:-2}
       - SIMULATE_FLIGHT=${SIMULATE_FLIGHT:-true}
       - START_LAT=${START_LAT:-10.8505}
@@ -18,4 +20,22 @@ services:
     volumes:
       # Mount certs folder to pass certificates dynamically without image rebuilds
       - ./device-simulator/certs:/app/certs:ro
+    restart: unless-stopped
+    depends_on:
+      - localstack
+
+  # LocalStack Offline AWS Cloud Emulator
+  localstack:
+    image: localstack/localstack:latest
+    container_name: drone-localstack
+    ports:
+      - "4566:4566"            # LocalStack Gateway
+      - "4510-4559:4510-4559"  # External services port range
+    environment:
+      - SERVICES=s3,kinesis,sts,cloudwatch
+      - AWS_DEFAULT_REGION=us-east-1
+      - DOCKER_HOST=unix:///var/run/docker.sock
+    volumes:
+      - ./scripts/localstack-init.sh:/etc/localstack/init/ready.d/localstack-init.sh:ro
+      - "/var/run/docker.sock:/var/run/docker.sock"
     restart: unless-stopped
