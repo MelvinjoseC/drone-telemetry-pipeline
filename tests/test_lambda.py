@@ -153,6 +153,39 @@ class TestLambdaFunction(unittest.TestCase):
         self.assertIn("seq-999", kwargs["Body"])
         self.assertIn("JSONDecodeError", kwargs["Body"])
 
+    @patch("lambda_function.s3")
+    def test_store_batch_to_s3(self, mock_s3):
+        payloads = [
+            {
+                "drone_id": "DRONE-001",
+                "timestamp": "2024-01-15T10:30:00Z",
+                "latitude": 10.8505,
+                "longitude": 76.2711,
+                "altitude_m": 100.0,
+                "speed_kmh": 40.0,
+                "battery_pct": 90.0,
+            },
+            {
+                "drone_id": "DRONE-002",
+                "timestamp": "2024-01-15T10:30:05Z",
+                "latitude": 10.8510,
+                "longitude": 76.2715,
+                "altitude_m": 105.0,
+                "speed_kmh": 42.0,
+                "battery_pct": 89.0,
+            },
+        ]
+        keys = lambda_function.store_batch_to_s3(payloads)
+        self.assertEqual(len(keys), 1)
+        self.assertTrue(
+            keys[0].startswith("telemetry/year=2024/month=01/day=15/hour=10/")
+        )
+        self.assertTrue(keys[0].endswith(".ndjson"))
+        mock_s3.put_object.assert_called_once()
+        body = mock_s3.put_object.call_args[1]["Body"].decode("utf-8")
+        lines = [line for line in body.strip().split("\n") if line]
+        self.assertEqual(len(lines), 2)
+
 
 if __name__ == "__main__":
     unittest.main()

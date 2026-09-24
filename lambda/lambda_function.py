@@ -50,6 +50,7 @@ ENABLE_QUARANTINE = os.environ.get("ENABLE_QUARANTINE", "true").lower() in (
     "1",
     "yes",
 )
+AGGREGATION_MODE = os.environ.get("AGGREGATION_MODE", "RECORD").upper()
 
 
 # ── S3 Key Builder ────────────────────────────────
@@ -110,6 +111,43 @@ def store_to_s3(payload):
     return key
 
 
+def store_batch_to_s3(payloads):
+    """
+    Micro-batch write: Aggregate multiple telemetry payloads into partition-aligned
+    Newline-Delimited JSON (NDJSON) files in S3.
+    Reduces S3 PutObject request volume and mitigates the small file problem.
+    """
+    if not payloads:
+        return []
+
+    partitions = {}
+    for p in payloads:
+        try:
+            dt = datetime.fromisoformat(p["timestamp"].replace("Z", "+00:00"))
+        except Exception:
+            dt = datetime.now(timezone.utc)
+
+        prefix = f"telemetry/year={dt.year}/month={dt.month:02d}/day={dt.day:02d}/hour={dt.hour:02d}/"
+        partitions.setdefault(prefix, []).append(p)
+
+    written_keys = []
+    now_str = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+    for prefix, group in partitions.items():
+        ndjson_body = "\n".join(json.dumps(item) for item in group) + "\n"
+        key = f"{prefix}batch_{now_str}_{len(group)}_records.ndjson"
+
+        s3.put_object(
+            Bucket=S3_BUCKET,
+            Key=key,
+            Body=ndjson_body.encode("utf-8"),
+            ContentType="application/x-ndjson",
+        )
+        written_keys.append(key)
+
+    return written_keys
+
+
 # ── Dead-Letter Queue Quarantine ───────────────────
 def quarantine_record(record, error_message, sequence_number=None):
     """
@@ -166,24 +204,28 @@ def lambda_handler(event, context):
     success_count = 0
     error_count = 0
     quarantine_count = 0
+    batch_payloads = []
 
     for record in records:
         sequence_number = record.get("kinesis", {}).get("sequenceNumber")
         try:
             payload = process_record(record)
-            s3_key = store_to_s3(payload)
 
-            log_json(
-                "INFO",
-                "Telemetry record processed and stored successfully",
-                {
-                    "drone_id": payload["drone_id"],
-                    "altitude_m": payload["altitude_m"],
-                    "speed_kmh": payload["speed_kmh"],
-                    "battery_pct": payload["battery_pct"],
-                    "s3_key": s3_key,
-                },
-            )
+            if AGGREGATION_MODE == "BATCH_NDJSON":
+                batch_payloads.append(payload)
+            else:
+                s3_key = store_to_s3(payload)
+                log_json(
+                    "INFO",
+                    "Telemetry record processed and stored successfully",
+                    {
+                        "drone_id": payload["drone_id"],
+                        "altitude_m": payload["altitude_m"],
+                        "speed_kmh": payload["speed_kmh"],
+                        "battery_pct": payload["battery_pct"],
+                        "s3_key": s3_key,
+                    },
+                )
 
             if payload.get("has_anomaly"):
                 log_json(
@@ -225,6 +267,29 @@ def lambda_handler(event, context):
 
             if sequence_number:
                 batch_item_failures.append({"itemIdentifier": sequence_number})
+
+    # Flush aggregated batch to S3 if running in micro-batching mode
+    if AGGREGATION_MODE == "BATCH_NDJSON" and batch_payloads:
+        try:
+            written_keys = store_batch_to_s3(batch_payloads)
+            log_json(
+                "INFO",
+                f"Aggregated {len(batch_payloads)} records into {len(written_keys)} NDJSON batch files",
+                {"s3_batch_keys": written_keys, "record_count": len(batch_payloads)},
+            )
+        except Exception as batch_err:
+            log_json(
+                "ERROR",
+                f"Failed to write aggregated batch to S3: {str(batch_err)}",
+                {"error": str(batch_err)},
+            )
+            # Re-report records as failed if batch write fails
+            for record in records:
+                seq = record.get("kinesis", {}).get("sequenceNumber")
+                if seq and not any(
+                    f["itemIdentifier"] == seq for f in batch_item_failures
+                ):
+                    batch_item_failures.append({"itemIdentifier": seq})
 
     log_json(
         "INFO",
