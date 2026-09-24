@@ -133,6 +133,26 @@ class TestLambdaFunction(unittest.TestCase):
             lambda_function.process_record = original_process
             lambda_function.store_to_s3 = original_store
 
+    @patch("lambda_function.s3")
+    def test_quarantine_record(self, mock_s3):
+        record = {
+            "kinesis": {
+                "data": base64.b64encode(b"malformed json payload").decode("utf-8"),
+                "sequenceNumber": "seq-999",
+                "approximateArrivalTimestamp": 1700000000.0,
+            }
+        }
+        dlq_key = lambda_function.quarantine_record(
+            record, "JSONDecodeError: invalid format", "seq-999"
+        )
+        self.assertTrue(dlq_key.startswith("dead-letter/year="))
+        self.assertTrue(dlq_key.endswith(".json"))
+        mock_s3.put_object.assert_called_once()
+        kwargs = mock_s3.put_object.call_args[1]
+        self.assertEqual(kwargs["Bucket"], "drone-telemetry-data")
+        self.assertIn("seq-999", kwargs["Body"])
+        self.assertIn("JSONDecodeError", kwargs["Body"])
+
 
 if __name__ == "__main__":
     unittest.main()

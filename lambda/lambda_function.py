@@ -43,6 +43,12 @@ s3 = boto3.client("s3", region_name=AWS_REGION)
 
 # Read S3 bucket name from environment variable
 S3_BUCKET = os.environ.get("S3_BUCKET", "drone-telemetry-data")
+DEAD_LETTER_PREFIX = os.environ.get("DEAD_LETTER_PREFIX", "dead-letter")
+ENABLE_QUARANTINE = os.environ.get("ENABLE_QUARANTINE", "true").lower() in (
+    "true",
+    "1",
+    "yes",
+)
 
 
 # ── S3 Key Builder ────────────────────────────────
@@ -98,6 +104,44 @@ def store_to_s3(payload):
     return key
 
 
+# ── Dead-Letter Queue Quarantine ───────────────────
+def quarantine_record(record, error_message, sequence_number=None):
+    """
+    Quarantine corrupt or invalid telemetry record to dead-letter prefix in S3.
+    Prevents unrecoverable poison-pill records from stalling Kinesis shard processing.
+    """
+    now = datetime.now(timezone.utc)
+    seq = sequence_number or "unknown"
+    dt_path = f"year={now.year}/month={now.month:02d}/day={now.day:02d}"
+    key = f"{DEAD_LETTER_PREFIX}/{dt_path}/dlq_{now.strftime('%Y%m%dT%H%M%SZ')}_{seq}.json"
+
+    raw_data = ""
+    try:
+        raw_data = base64.b64decode(record.get("kinesis", {}).get("data", "")).decode(
+            "utf-8", errors="replace"
+        )
+    except Exception:
+        raw_data = str(record.get("kinesis", {}).get("data", ""))
+
+    dlq_payload = {
+        "quarantined_at": now.isoformat().replace("+00:00", "Z"),
+        "error": str(error_message),
+        "sequence_number": sequence_number,
+        "approximate_arrival_timestamp": record.get("kinesis", {}).get(
+            "approximateArrivalTimestamp"
+        ),
+        "raw_payload_preview": raw_data[:2048],
+    }
+
+    s3.put_object(
+        Bucket=S3_BUCKET,
+        Key=key,
+        Body=json.dumps(dlq_payload, indent=2),
+        ContentType="application/json",
+    )
+    return key
+
+
 # ── Main handler ──────────────────────────────────
 def lambda_handler(event, context):
     """
@@ -115,6 +159,7 @@ def lambda_handler(event, context):
     batch_item_failures = []
     success_count = 0
     error_count = 0
+    quarantine_count = 0
 
     for record in records:
         sequence_number = record.get("kinesis", {}).get("sequenceNumber")
@@ -142,6 +187,25 @@ def lambda_handler(event, context):
                 {"error": str(e), "sequence_number": sequence_number},
             )
             error_count += 1
+
+            # Check if this is an unrecoverable validation/parse poison-pill
+            if ENABLE_QUARANTINE and isinstance(e, (ValueError, json.JSONDecodeError)):
+                try:
+                    dlq_key = quarantine_record(record, str(e), sequence_number)
+                    log_json(
+                        "WARN",
+                        f"Poison-pill record quarantined to DLQ: {dlq_key}",
+                        {"dlq_key": dlq_key, "sequence_number": sequence_number},
+                    )
+                    quarantine_count += 1
+                    continue
+                except Exception as dlq_err:
+                    log_json(
+                        "ERROR",
+                        f"Failed to quarantine record to DLQ: {str(dlq_err)}",
+                        {"error": str(dlq_err)},
+                    )
+
             if sequence_number:
                 batch_item_failures.append({"itemIdentifier": sequence_number})
 
@@ -151,6 +215,7 @@ def lambda_handler(event, context):
         {
             "success_count": success_count,
             "error_count": error_count,
+            "quarantine_count": quarantine_count,
             "failures_reported": len(batch_item_failures),
         },
     )
