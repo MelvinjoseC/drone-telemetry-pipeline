@@ -20,22 +20,29 @@ import random
 import datetime
 import paho.mqtt.client as mqtt
 from config import (
-    AWS_IOT_ENDPOINT, MQTT_TOPIC, DRONE_ID,
-    ROOT_CA, CERT_FILE, KEY_FILE,
-    SEND_INTERVAL, START_LAT, START_LON
+    AWS_IOT_ENDPOINT,
+    MQTT_TOPIC,
+    DRONE_ID,
+    ROOT_CA,
+    CERT_FILE,
+    KEY_FILE,
+    SEND_INTERVAL,
+    START_LAT,
+    START_LON,
 )
+
 
 # ── Flight simulation state ───────────────────────
 class DroneSimulator:
     def __init__(self):
-        self.lat        = START_LAT
-        self.lon        = START_LON
-        self.altitude   = 0.0          # meters
-        self.speed      = 0.0          # km/h
-        self.heading    = 0.0          # degrees
-        self.battery    = 100          # percentage
+        self.lat = START_LAT
+        self.lon = START_LON
+        self.altitude = 0.0  # meters
+        self.speed = 0.0  # km/h
+        self.heading = 0.0  # degrees
+        self.battery = 100  # percentage
         self.flight_mode = "TAKEOFF"
-        self.tick       = 0
+        self.tick = 0
 
     def update(self):
         """Simulate realistic drone flight parameters."""
@@ -45,15 +52,15 @@ class DroneSimulator:
         if self.tick <= 5:
             # Takeoff phase
             self.flight_mode = "TAKEOFF"
-            self.altitude    = min(self.altitude + 20, 100)
-            self.speed       = min(self.speed + 5, 20)
+            self.altitude = min(self.altitude + 20, 100)
+            self.speed = min(self.speed + 5, 20)
 
         elif self.tick <= 50:
             # Cruise phase — moving in a pattern
             self.flight_mode = "AUTO"
-            self.altitude    = 100 + random.uniform(-5, 5)
-            self.speed       = 45 + random.uniform(-5, 5)
-            self.heading     = (self.tick * 7) % 360
+            self.altitude = 100 + random.uniform(-5, 5)
+            self.speed = 45 + random.uniform(-5, 5)
+            self.heading = (self.tick * 7) % 360
 
             # Move GPS position
             rad = math.radians(self.heading)
@@ -63,15 +70,15 @@ class DroneSimulator:
         elif self.tick <= 60:
             # Landing phase
             self.flight_mode = "LANDING"
-            self.altitude    = max(self.altitude - 10, 0)
-            self.speed       = max(self.speed - 5, 0)
+            self.altitude = max(self.altitude - 10, 0)
+            self.speed = max(self.speed - 5, 0)
 
         else:
             # Reset for next loop
-            self.tick     = 0
-            self.battery  = 100
+            self.tick = 0
+            self.battery = 100
             self.altitude = 0
-            self.speed    = 0
+            self.speed = 0
             self.flight_mode = "TAKEOFF"
             print("\n🔄 New flight cycle started!\n")
 
@@ -80,17 +87,20 @@ class DroneSimulator:
             self.battery = max(self.battery - 0.3, 0)
 
         return {
-            "drone_id"    : DRONE_ID,
-            "timestamp"   : datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
-            "latitude"    : round(self.lat, 6),
-            "longitude"   : round(self.lon, 6),
-            "altitude_m"  : round(self.altitude, 2),
-            "speed_kmh"   : round(self.speed, 2),
-            "heading_deg" : round(self.heading, 1),
-            "battery_pct" : round(self.battery, 1),
-            "flight_mode" : self.flight_mode,
-            "status"      : "flying" if self.altitude > 0 else "grounded"
+            "drone_id": DRONE_ID,
+            "timestamp": datetime.datetime.now(datetime.timezone.utc)
+            .isoformat()
+            .replace("+00:00", "Z"),
+            "latitude": round(self.lat, 6),
+            "longitude": round(self.lon, 6),
+            "altitude_m": round(self.altitude, 2),
+            "speed_kmh": round(self.speed, 2),
+            "heading_deg": round(self.heading, 1),
+            "battery_pct": round(self.battery, 1),
+            "flight_mode": self.flight_mode,
+            "status": "flying" if self.altitude > 0 else "grounded",
         }
+
 
 # ── MQTT Callbacks ────────────────────────────────
 def on_connect(client, userdata, flags, rc):
@@ -99,25 +109,29 @@ def on_connect(client, userdata, flags, rc):
     else:
         print(f"❌ Connection failed. Code: {rc}")
 
+
 def on_publish(client, userdata, mid):
     pass  # silent on publish
+
 
 def on_disconnect(client, userdata, rc):
     print(f"⚠️  Disconnected (rc={rc})")
 
+
 # ── Setup MQTT ────────────────────────────────────
 def setup_mqtt():
     client = mqtt.Client(client_id=DRONE_ID)
-    client.on_connect    = on_connect
-    client.on_publish    = on_publish
+    client.on_connect = on_connect
+    client.on_publish = on_publish
     client.on_disconnect = on_disconnect
     client.tls_set(
-        ca_certs    = ROOT_CA,
-        certfile    = CERT_FILE,
-        keyfile     = KEY_FILE,
-        tls_version = ssl.PROTOCOL_TLSv1_2
+        ca_certs=ROOT_CA,
+        certfile=CERT_FILE,
+        keyfile=KEY_FILE,
+        tls_version=ssl.PROTOCOL_TLSv1_2,
     )
     return client
+
 
 # ── Main ──────────────────────────────────────────
 def main():
@@ -128,7 +142,7 @@ def main():
     print(f"   Interval : {SEND_INTERVAL}s")
     print("─" * 50)
 
-    drone  = DroneSimulator()
+    drone = DroneSimulator()
     client = setup_mqtt()
 
     try:
@@ -137,7 +151,7 @@ def main():
         client.loop_start()
 
         while True:
-            telemetry    = drone.update()
+            telemetry = drone.update()
             payload_json = json.dumps(telemetry)
             client.publish(MQTT_TOPIC, payload_json, qos=1)
 
@@ -158,6 +172,7 @@ def main():
         client.loop_stop()
         client.disconnect()
         print("✅ Disconnected cleanly.")
+
 
 if __name__ == "__main__":
     main()

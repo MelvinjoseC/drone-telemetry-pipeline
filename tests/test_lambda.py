@@ -6,16 +6,19 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 # Add lambda directory to path
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../lambda')))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../lambda")))
 
 import lambda_function
 
-class TestLambdaFunction(unittest.TestCase):
 
+class TestLambdaFunction(unittest.TestCase):
     def test_build_s3_key(self):
         # Test standard ISO timestamp parsing (Hive partition style)
         key = lambda_function.build_s3_key("DRONE-001", "2024-01-15T10:30:00Z")
-        self.assertEqual(key, "telemetry/year=2024/month=01/day=15/hour=10/DRONE-001_2024-01-15T10-30-00Z.json")
+        self.assertEqual(
+            key,
+            "telemetry/year=2024/month=01/day=15/hour=10/DRONE-001_2024-01-15T10-30-00Z.json",
+        )
 
         # Test fallback on invalid timestamp
         key_fallback = lambda_function.build_s3_key("DRONE-001", "invalid-time")
@@ -31,17 +34,13 @@ class TestLambdaFunction(unittest.TestCase):
             "longitude": 76.2711,
             "altitude_m": 120.5,
             "speed_kmh": 45.2,
-            "battery_pct": 78
+            "battery_pct": 78,
         }
-        raw_bytes = json.dumps(payload).encode('utf-8')
-        encoded = base64.b64encode(raw_bytes).decode('utf-8')
-        
-        record = {
-            "kinesis": {
-                "data": encoded
-            }
-        }
-        
+        raw_bytes = json.dumps(payload).encode("utf-8")
+        encoded = base64.b64encode(raw_bytes).decode("utf-8")
+
+        record = {"kinesis": {"data": encoded}}
+
         processed = lambda_function.process_record(record)
         self.assertEqual(processed["drone_id"], "DRONE-001")
         self.assertEqual(processed["source"], "kinesis-lambda-pipeline")
@@ -55,21 +54,17 @@ class TestLambdaFunction(unittest.TestCase):
             "latitude": 10.8505,
             "longitude": 76.2711,
             "altitude_m": 120.5,
-            "speed_kmh": 45.2
+            "speed_kmh": 45.2,
         }
-        raw_bytes = json.dumps(payload).encode('utf-8')
-        encoded = base64.b64encode(raw_bytes).decode('utf-8')
-        
-        record = {
-            "kinesis": {
-                "data": encoded
-            }
-        }
-        
+        raw_bytes = json.dumps(payload).encode("utf-8")
+        encoded = base64.b64encode(raw_bytes).decode("utf-8")
+
+        record = {"kinesis": {"data": encoded}}
+
         with self.assertRaises(ValueError):
             lambda_function.process_record(record)
 
-    @patch('lambda_function.s3')
+    @patch("lambda_function.s3")
     def test_store_to_s3(self, mock_s3):
         payload = {
             "drone_id": "DRONE-001",
@@ -78,9 +73,9 @@ class TestLambdaFunction(unittest.TestCase):
             "longitude": 76.2711,
             "altitude_m": 120.5,
             "speed_kmh": 45.2,
-            "battery_pct": 78
+            "battery_pct": 78,
         }
-        
+
         # Test default bucket name config
         key = lambda_function.store_to_s3(payload)
         mock_s3.put_object.assert_called_once()
@@ -93,20 +88,28 @@ class TestLambdaFunction(unittest.TestCase):
         # Directly monkeypatch functions to isolate handler test
         original_process = lambda_function.process_record
         original_store = lambda_function.store_to_s3
-        
+
         try:
-            lambda_function.process_record = MagicMock(return_value={"drone_id": "DRONE-001", "altitude_m": 100, "speed_kmh": 40, "battery_pct": 80, "timestamp": "2024-01-15"})
+            lambda_function.process_record = MagicMock(
+                return_value={
+                    "drone_id": "DRONE-001",
+                    "altitude_m": 100,
+                    "speed_kmh": 40,
+                    "battery_pct": 80,
+                    "timestamp": "2024-01-15",
+                }
+            )
             lambda_function.store_to_s3 = MagicMock(return_value="telemetry/path.json")
-            
+
             event = {
                 "Records": [
                     {"kinesis": {"data": "dummy1", "sequenceNumber": "seq1"}},
-                    {"kinesis": {"data": "dummy2", "sequenceNumber": "seq2"}}
+                    {"kinesis": {"data": "dummy2", "sequenceNumber": "seq2"}},
                 ]
             }
-            
+
             result = lambda_function.lambda_handler(event, None)
-            
+
             # Verify batchItemFailures is empty for success
             self.assertEqual(result["batchItemFailures"], [])
             self.assertEqual(lambda_function.process_record.call_count, 2)
@@ -115,16 +118,21 @@ class TestLambdaFunction(unittest.TestCase):
             # Test failure case
             lambda_function.process_record.side_effect = Exception("Mock Error")
             result_error = lambda_function.lambda_handler(event, None)
-            
+
             # Verify batchItemFailures returns the failed sequences
             self.assertEqual(len(result_error["batchItemFailures"]), 2)
-            self.assertEqual(result_error["batchItemFailures"][0]["itemIdentifier"], "seq1")
-            self.assertEqual(result_error["batchItemFailures"][1]["itemIdentifier"], "seq2")
-            
+            self.assertEqual(
+                result_error["batchItemFailures"][0]["itemIdentifier"], "seq1"
+            )
+            self.assertEqual(
+                result_error["batchItemFailures"][1]["itemIdentifier"], "seq2"
+            )
+
         finally:
             # Restore original state
             lambda_function.process_record = original_process
             lambda_function.store_to_s3 = original_store
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     unittest.main()

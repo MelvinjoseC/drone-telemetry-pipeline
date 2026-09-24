@@ -12,7 +12,9 @@ load_dotenv()
 
 # AWS IoT Core endpoint
 # Find: AWS Console → IoT Core → Settings
-AWS_IOT_ENDPOINT = os.getenv("AWS_IOT_ENDPOINT", "YOUR_ENDPOINT.iot.us-east-1.amazonaws.com")
+AWS_IOT_ENDPOINT = os.getenv(
+    "AWS_IOT_ENDPOINT", "YOUR_ENDPOINT.iot.us-east-1.amazonaws.com"
+)
 
 # AWS Region
 AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
@@ -24,14 +26,20 @@ MQTT_TOPIC = os.getenv("MQTT_TOPIC", "drones/telemetry")
 DRONE_ID = os.getenv("DRONE_ID", "DRONE-001")
 
 # Certificate paths
-CERT_DIR  = os.getenv("CERT_DIR", "./certs")
-ROOT_CA   = os.getenv("ROOT_CA", f"{CERT_DIR}/AmazonRootCA1.pem")
+CERT_DIR = os.getenv("CERT_DIR", "./certs")
+ROOT_CA = os.getenv("ROOT_CA", f"{CERT_DIR}/AmazonRootCA1.pem")
 CERT_FILE = os.getenv("CERT_FILE", f"{CERT_DIR}/device-certificate.pem.crt")
-KEY_FILE  = os.getenv("KEY_FILE", f"{CERT_DIR}/private.pem.key")
+KEY_FILE = os.getenv("KEY_FILE", f"{CERT_DIR}/private.pem.key")
 
 # Simulation settings
-SEND_INTERVAL = int(os.getenv("SEND_INTERVAL", "2"))       # Send telemetry every 2 seconds
-SIMULATE_FLIGHT = os.getenv("SIMULATE_FLIGHT", "True").lower() in ("true", "1", "t", "y", "yes")
+SEND_INTERVAL = int(os.getenv("SEND_INTERVAL", "2"))  # Send telemetry every 2 seconds
+SIMULATE_FLIGHT = os.getenv("SIMULATE_FLIGHT", "True").lower() in (
+    "true",
+    "1",
+    "t",
+    "y",
+    "yes",
+)
 
 # Starting GPS coordinates (Kochi, Kerala)
 START_LAT = float(os.getenv("START_LAT", "10.8505"))
