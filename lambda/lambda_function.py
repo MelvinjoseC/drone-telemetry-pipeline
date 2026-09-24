@@ -18,6 +18,7 @@ import base64
 import logging
 from datetime import datetime, timezone
 
+from anomaly_detector import detect_anomalies
 from telemetry_model import validate_telemetry
 
 # ── Logging ───────────────────────────────────────
@@ -84,6 +85,11 @@ def process_record(record):
         raise ValueError(f"Failed to parse JSON payload: {str(e)}")
 
     validated = validate_telemetry(payload)
+
+    # Anomaly evaluation
+    anomalies = detect_anomalies(validated)
+    validated["anomalies"] = anomalies
+    validated["has_anomaly"] = len(anomalies) > 0
 
     # Add processing metadata
     validated["processed_at"] = (
@@ -178,6 +184,17 @@ def lambda_handler(event, context):
                     "s3_key": s3_key,
                 },
             )
+
+            if payload.get("has_anomaly"):
+                log_json(
+                    "WARN",
+                    f"Flight anomalies detected for {payload['drone_id']}",
+                    {
+                        "drone_id": payload["drone_id"],
+                        "anomalies": payload["anomalies"],
+                    },
+                )
+
             success_count += 1
 
         except Exception as e:
