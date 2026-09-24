@@ -66,3 +66,8 @@ output "athena_workgroup_name" {
   value       = aws_athena_workgroup.telemetry_analytics.name
   description = "Name of the Athena workgroup for analytical queries"
 }
+
+output "cloudwatch_dashboard_name" {
+  value       = aws_cloudwatch_dashboard.pipeline_dashboard.dashboard_name
+  description = "Name of the operational CloudWatch dashboard for pipeline monitoring"
+}

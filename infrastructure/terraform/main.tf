@@ -501,3 +501,83 @@ resource "aws_athena_workgroup" "telemetry_analytics" {
     Project     = "Drone-Telemetry"
   }
 }
+
+# ── CloudWatch Operational Dashboard ─────────────
+
+resource "aws_cloudwatch_dashboard" "pipeline_dashboard" {
+  dashboard_name = "drone-telemetry-pipeline-${var.environment}"
+
+  dashboard_body = jsonencode({
+    widgets = [
+      {
+        type   = "metric"
+        x      = 0
+        y      = 0
+        width  = 12
+        height = 6
+        properties = {
+          metrics = [
+            ["AWS/Kinesis", "IncomingRecords", "StreamName", aws_kinesis_stream.telemetry_stream.name, { stat = "Sum", period = 60, title = "Incoming Records/min" }],
+            [".", "IncomingBytes", ".", ".", { stat = "Sum", period = 60, yAxis = "right", title = "Incoming Bytes" }]
+          ]
+          view    = "timeSeries"
+          stacked = false
+          region  = var.aws_region
+          title   = "Telemetry Stream Ingestion Volume"
+        }
+      },
+      {
+        type   = "metric"
+        x      = 12
+        y      = 0
+        width  = 12
+        height = 6
+        properties = {
+          metrics = [
+            ["AWS/Lambda", "Invocations", "FunctionName", aws_lambda_function.telemetry_processor.function_name, { stat = "Sum", period = 60 }],
+            [".", "Errors", ".", ".", { stat = "Sum", period = 60, color = "#d62728" }],
+            [".", "Throttles", ".", ".", { stat = "Sum", period = 60, color = "#ff7f0e" }]
+          ]
+          view    = "timeSeries"
+          stacked = false
+          region  = var.aws_region
+          title   = "Lambda Processor Invocations & Errors"
+        }
+      },
+      {
+        type   = "metric"
+        x      = 0
+        y      = 6
+        width  = 12
+        height = 6
+        properties = {
+          metrics = [
+            ["AWS/Lambda", "Duration", "FunctionName", aws_lambda_function.telemetry_processor.function_name, { stat = "p50", period = 60, label = "p50 Duration (ms)" }],
+            ["...", { stat = "p90", period = 60, label = "p90 Duration (ms)" }],
+            ["...", { stat = "p99", period = 60, label = "p99 Duration (ms)" }]
+          ]
+          view    = "timeSeries"
+          stacked = false
+          region  = var.aws_region
+          title   = "Lambda Execution Latency Percentiles"
+        }
+      },
+      {
+        type   = "metric"
+        x      = 12
+        y      = 6
+        width  = 12
+        height = 6
+        properties = {
+          metrics = [
+            ["AWS/S3", "AllRequests", "BucketName", aws_s3_bucket.telemetry.id, "FilterId", "EntireBucket", { stat = "Sum", period = 300 }]
+          ]
+          view    = "timeSeries"
+          stacked = false
+          region  = var.aws_region
+          title   = "S3 Ingestion Activity"
+        }
+      }
+    ]
+  })
+}
