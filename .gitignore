@@ -16,3 +16,8 @@ venv/
 *.tfvars
 *.tfvars.json
 infrastructure/terraform/*.zip
+
+# Testing & Coverage
+.coverage
+.coverage.*
+htmlcov/

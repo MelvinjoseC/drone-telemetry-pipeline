@@ -1,0 +1,15 @@
+[run]
+source = 
+    lambda
+    device-simulator
+omit = 
+    tests/*
+    */__pycache__/*
+
+[report]
+show_missing = True
+exclude_lines =
+    pragma: no cover
+    def __repr__
+    if __name__ == .__main__.:
+    raise NotImplementedError
