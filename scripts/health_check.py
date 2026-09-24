@@ -2,14 +2,32 @@
 """
 health_check.py
 ────────────────────────────────────────────────────────
-Validates configuration, certificate existence, and DNS
-resolution of the AWS IoT Core endpoint.
+Enterprise diagnostic CLI for the Drone Telemetry Pipeline.
+
+Validates:
+- Local configuration & environment variables
+- TLS X.509 device certificates & private keys
+- DNS resolution & network reachability of AWS IoT endpoint
+- Python runtime dependencies
+- AWS Cloud credentials & IAM STS Caller Identity (optional)
+- S3 Data Lake & Kinesis Stream reachability (optional)
+
+Author: Melvin Chacko Jose
 ────────────────────────────────────────────────────────
 """
 
+import argparse
+import json
 import os
-import sys
 import socket
+import sys
+from typing import Any, Dict
+
+if sys.stdout and hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 # Add device-simulator directory to Python path
 SIMULATOR_DIR = os.path.abspath(
@@ -18,86 +36,272 @@ SIMULATOR_DIR = os.path.abspath(
 sys.path.append(SIMULATOR_DIR)
 
 
-def run_health_checks():
-    print("[INFO] Running Drone Telemetry Pipeline Health Checks...")
-    print("=" * 60)
-
-    all_passed = True
-
-    # 1. Verify Import of config.py
+def check_config(report: Dict[str, Any]) -> bool:
+    """Validate config module and critical pipeline parameters."""
     try:
         import config
 
-        print("[OK] Config module imported successfully.")
+        report["checks"]["config_import"] = {
+            "status": "PASS",
+            "message": "Config module loaded successfully.",
+        }
     except ImportError as e:
-        print(f"[ERROR] Failed to import config.py: {e}")
+        report["checks"]["config_import"] = {
+            "status": "FAIL",
+            "message": f"Failed to import config.py: {e}",
+        }
         return False
 
-    # 2. Check AWS IoT Core Endpoint Configuration
     placeholder = "YOUR_ENDPOINT.iot.us-east-1.amazonaws.com"
     endpoint = getattr(config, "AWS_IOT_ENDPOINT", "")
 
     if not endpoint or endpoint == placeholder:
-        print("[ERROR] AWS IoT Core Endpoint is NOT configured in config.py.")
-        print(f"        Current value: '{endpoint}'")
-        all_passed = False
+        report["checks"]["iot_endpoint"] = {
+            "status": "WARN",
+            "value": endpoint,
+            "message": "AWS IoT Core Endpoint is still using default placeholder.",
+        }
     else:
-        print(f"[OK] AWS IoT Core Endpoint is configured: {endpoint}")
-
-        # 3. Verify DNS Resolution of Endpoint
+        # DNS Resolution test
         try:
-            # Resolve DNS
             ip_address = socket.gethostbyname(endpoint)
-            print(f"[OK] DNS resolution successful for {endpoint} -> {ip_address}")
+            report["checks"]["iot_endpoint"] = {
+                "status": "PASS",
+                "value": endpoint,
+                "resolved_ip": ip_address,
+                "message": f"DNS resolution successful ({ip_address}).",
+            }
         except socket.gaierror as e:
-            print(f"[ERROR] DNS resolution failed for {endpoint}: {e}")
-            print(
-                "        Please check your internet connection or the endpoint spelling."
-            )
-            all_passed = False
+            report["checks"]["iot_endpoint"] = {
+                "status": "FAIL",
+                "value": endpoint,
+                "message": f"DNS resolution failed: {e}",
+            }
 
-    # 4. Check Certificate Files Existence
+    # Certificate presence check
     cert_files = {
-        "Root CA Certificate": config.ROOT_CA,
-        "Device Certificate": config.CERT_FILE,
-        "Private Key File": config.KEY_FILE,
+        "root_ca": ("Root CA Certificate", config.ROOT_CA),
+        "device_cert": ("Device Certificate", config.CERT_FILE),
+        "private_key": ("Private Key File", config.KEY_FILE),
     }
 
-    for name, rel_path in cert_files.items():
-        # Resolve path relative to device-simulator directory
+    certs_ok = True
+    for key, (label, rel_path) in cert_files.items():
         abs_path = os.path.abspath(os.path.join(SIMULATOR_DIR, rel_path))
-        if os.path.exists(abs_path):
-            print(f"[OK] Found {name}: {rel_path}")
+        if os.path.exists(abs_path) and os.path.getsize(abs_path) > 0:
+            report["checks"][f"cert_{key}"] = {
+                "status": "PASS",
+                "label": label,
+                "path": rel_path,
+                "size_bytes": os.path.getsize(abs_path),
+            }
         else:
-            print(f"[ERROR] Missing {name}: {rel_path}")
-            print(f"        Expected path: {abs_path}")
-            all_passed = False
+            report["checks"][f"cert_{key}"] = {
+                "status": "WARN",
+                "label": label,
+                "path": rel_path,
+                "message": f"Missing or empty file at {abs_path}",
+            }
+            certs_ok = False
 
-    # 5. Check Python dependencies
-    required_packages = ["paho-mqtt", "boto3"]
-    for pkg in required_packages:
+    return certs_ok
+
+
+def check_dependencies(report: Dict[str, Any]) -> bool:
+    """Verify runtime Python packages."""
+    required = ["paho-mqtt", "boto3", "python-dotenv"]
+    all_installed = True
+    for pkg in required:
+        mod_name = pkg.replace("-", "_")
         try:
-            __import__(pkg.replace("-", "_"))
-            print(f"[OK] Python package '{pkg}' is installed.")
+            mod = __import__(mod_name)
+            ver = getattr(mod, "__version__", "unknown")
+            report["checks"][f"dep_{pkg}"] = {
+                "status": "PASS",
+                "package": pkg,
+                "version": str(ver),
+            }
         except ImportError:
-            print(f"[WARN] Python package '{pkg}' is NOT installed.")
-            print(
-                f"       Run 'pip install -r device-simulator/requirements.txt' or 'pip install {pkg}'"
-            )
+            report["checks"][f"dep_{pkg}"] = {
+                "status": "WARN",
+                "package": pkg,
+                "message": f"Package {pkg} is not installed.",
+            }
+            all_installed = False
+    return all_installed
+
+
+def check_aws_services(
+    report: Dict[str, Any], test_s3: bool = False, test_kinesis: bool = False
+) -> bool:
+    """Verify active AWS credentials and cloud resource reachability."""
+    try:
+        import boto3
+        from botocore.exceptions import ClientError, NoCredentialsError
+    except ImportError:
+        report["checks"]["aws_auth"] = {
+            "status": "FAIL",
+            "message": "boto3 not installed.",
+        }
+        return False
+
+    try:
+        sts = boto3.client("sts")
+        identity = sts.get_caller_identity()
+        report["checks"]["aws_auth"] = {
+            "status": "PASS",
+            "account": identity.get("Account"),
+            "arn": identity.get("Arn"),
+            "user_id": identity.get("UserId"),
+        }
+    except (NoCredentialsError, ClientError) as e:
+        report["checks"]["aws_auth"] = {
+            "status": "WARN",
+            "message": f"AWS credentials not available or invalid: {e}",
+        }
+        return False
+
+    # Check S3
+    if test_s3:
+        try:
+            import config
+
+            bucket_name = getattr(config, "S3_BUCKET", "drone-telemetry-data")
+            s3 = boto3.client("s3")
+            s3.head_bucket(Bucket=bucket_name)
+            report["checks"]["s3_bucket"] = {
+                "status": "PASS",
+                "bucket": bucket_name,
+                "message": "S3 bucket accessible.",
+            }
+        except Exception as e:
+            report["checks"]["s3_bucket"] = {
+                "status": "WARN",
+                "message": f"S3 bucket check failed: {e}",
+            }
+
+    # Check Kinesis
+    if test_kinesis:
+        try:
+            import config
+
+            stream_name = getattr(config, "KINESIS_STREAM", "DroneDataStream")
+            kinesis = boto3.client("kinesis")
+            res = kinesis.describe_stream_summary(StreamName=stream_name)
+            status = res["StreamDescriptionSummary"]["StreamStatus"]
+            report["checks"]["kinesis_stream"] = {
+                "status": "PASS" if status == "ACTIVE" else "WARN",
+                "stream": stream_name,
+                "stream_status": status,
+            }
+        except Exception as e:
+            report["checks"]["kinesis_stream"] = {
+                "status": "WARN",
+                "message": f"Kinesis stream check failed: {e}",
+            }
+
+    return True
+
+
+def run_health_checks(
+    verify_aws: bool = False,
+    test_s3: bool = False,
+    test_kinesis: bool = False,
+) -> bool:
+    """Run all health check modules and print formatted diagnostic console report."""
+    report: Dict[str, Any] = {"checks": {}}
+
+    print("[INFO] Running Drone Telemetry Pipeline Health Diagnostics...")
+    print("=" * 60)
+
+    check_config(report)
+    check_dependencies(report)
+
+    if verify_aws:
+        check_aws_services(report, test_s3=test_s3, test_kinesis=test_kinesis)
+
+    has_failures = False
+    for check_id, check_data in report["checks"].items():
+        status = check_data.get("status", "UNKNOWN")
+        msg = check_data.get("message", "")
+        if status == "PASS":
+            extra = check_data.get("resolved_ip") or check_data.get("version", "")
+            extra_str = f" ({extra})" if extra else ""
+            print(f"[OK]   {check_id}: {msg or 'OK'}{extra_str}")
+        elif status == "WARN":
+            print(f"[WARN] {check_id}: {msg or 'Notice'}")
+        else:
+            print(f"[FAIL] {check_id}: {msg}")
+            has_failures = True
 
     print("=" * 60)
-    if all_passed:
-        print("[SUCCESS] All checks passed! Pipeline configuration is healthy.")
+    if not has_failures:
+        print("[SUCCESS] All essential diagnostics passed.")
         return True
     else:
-        print(
-            "[ERROR] Some health checks failed. Please fix the issues detailed above."
-        )
+        print("[ERROR] Some health checks reported failures.")
         return False
 
 
-if __name__ == "__main__":
-    success = run_health_checks()
-    # We don't exit with 1 here for config checks that fail on placeholder config files
-    # since we expect fresh checkouts to have defaults, but we return status code appropriately.
+def main():
+    parser = argparse.ArgumentParser(
+        description="Drone Telemetry Pipeline Health Diagnostic CLI"
+    )
+    parser.add_argument(
+        "--verify-aws",
+        action="store_true",
+        help="Verify active AWS credentials and STS caller identity",
+    )
+    parser.add_argument(
+        "--check-s3",
+        action="store_true",
+        help="Verify target S3 bucket accessibility",
+    )
+    parser.add_argument(
+        "--check-kinesis",
+        action="store_true",
+        help="Verify Kinesis stream status",
+    )
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="Exit with non-zero status if any warning or error is found",
+    )
+    parser.add_argument(
+        "--json-output",
+        type=str,
+        default="",
+        help="Path to write JSON diagnostic report",
+    )
+
+    args = parser.parse_args()
+
+    report: Dict[str, Any] = {"checks": {}}
+    check_config(report)
+    check_dependencies(report)
+    if args.verify_aws or args.check_s3 or args.check_kinesis:
+        check_aws_services(
+            report, test_s3=args.check_s3, test_kinesis=args.check_kinesis
+        )
+
+    if args.json_output:
+        with open(args.json_output, "w", encoding="utf-8") as f:
+            json.dump(report, f, indent=2)
+        print(f"[OK] Diagnostic report saved to {args.json_output}")
+
+    success = run_health_checks(
+        verify_aws=args.verify_aws,
+        test_s3=args.check_s3,
+        test_kinesis=args.check_kinesis,
+    )
+
+    if args.strict and any(
+        c.get("status") in ("WARN", "FAIL") for c in report["checks"].values()
+    ):
+        sys.exit(1)
+
     sys.exit(0 if success else 1)
+
+
+if __name__ == "__main__":
+    main()
