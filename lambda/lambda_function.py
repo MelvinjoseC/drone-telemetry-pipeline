@@ -18,6 +18,8 @@ import base64
 import logging
 from datetime import datetime, timezone
 
+from telemetry_model import validate_telemetry
+
 # ── Logging ───────────────────────────────────────
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -75,26 +77,15 @@ def process_record(record):
     except Exception as e:
         raise ValueError(f"Failed to parse JSON payload: {str(e)}")
 
-    required = [
-        "drone_id",
-        "timestamp",
-        "latitude",
-        "longitude",
-        "altitude_m",
-        "speed_kmh",
-        "battery_pct",
-    ]
-    for field in required:
-        if field not in payload or payload[field] is None:
-            raise ValueError(f"Missing required field: '{field}' in payload")
+    validated = validate_telemetry(payload)
 
     # Add processing metadata
-    payload["processed_at"] = (
+    validated["processed_at"] = (
         datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     )
-    payload["source"] = "kinesis-lambda-pipeline"
+    validated["source"] = "kinesis-lambda-pipeline"
 
-    return payload
+    return validated
 
 
 # ── Store to S3 ───────────────────────────────────
