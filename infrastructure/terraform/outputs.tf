@@ -51,3 +51,18 @@ output "sns_topic_arn" {
   value       = aws_sns_topic.pipeline_alerts.arn
   description = "ARN of the SNS topic used for pipeline monitoring alarms"
 }
+
+output "glue_database_name" {
+  value       = aws_glue_catalog_database.telemetry_db.name
+  description = "Name of the Glue Catalog database for Athena queries"
+}
+
+output "glue_table_name" {
+  value       = aws_glue_catalog_table.telemetry_records.name
+  description = "Name of the Glue Catalog table for telemetry records"
+}
+
+output "athena_workgroup_name" {
+  value       = aws_athena_workgroup.telemetry_analytics.name
+  description = "Name of the Athena workgroup for analytical queries"
+}

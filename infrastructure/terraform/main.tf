@@ -65,6 +65,8 @@ resource "aws_s3_bucket_lifecycle_configuration" "telemetry_lifecycle" {
     id     = "archive-old-telemetry"
     status = "Enabled"
 
+    filter {}
+
     transition {
       days          = 30
       storage_class = "GLACIER"
@@ -350,6 +352,147 @@ resource "aws_cloudwatch_metric_alarm" "kinesis_throttles_alarm" {
 
   dimensions = {
     StreamName = aws_kinesis_stream.telemetry_stream.name
+  }
+
+  tags = {
+    Environment = var.environment
+    ManagedBy   = "Terraform"
+    Project     = "Drone-Telemetry"
+  }
+}
+
+# ── AWS Glue Catalog & Athena Data Lake ──────────
+
+resource "aws_glue_catalog_database" "telemetry_db" {
+  name        = "drone_telemetry_db_${var.environment}"
+  description = "Glue Data Catalog database for drone telemetry analytical queries"
+}
+
+resource "aws_glue_catalog_table" "telemetry_records" {
+  name          = "telemetry_records"
+  database_name = aws_glue_catalog_database.telemetry_db.name
+  table_type    = "EXTERNAL_TABLE"
+
+  parameters = {
+    "classification"            = "json"
+    "projection.enabled"        = "true"
+    "projection.year.type"      = "integer"
+    "projection.year.range"     = "2024,2030"
+    "projection.month.type"     = "integer"
+    "projection.month.range"    = "1,12"
+    "projection.month.digits"   = "2"
+    "projection.day.type"       = "integer"
+    "projection.day.range"      = "1,31"
+    "projection.day.digits"     = "2"
+    "projection.hour.type"      = "integer"
+    "projection.hour.range"     = "0,23"
+    "projection.hour.digits"    = "2"
+    "storage.location.template" = "s3://${aws_s3_bucket.telemetry.id}/telemetry/year=$${year}/month=$${month}/day=$${day}/hour=$${hour}"
+  }
+
+  storage_descriptor {
+    location      = "s3://${aws_s3_bucket.telemetry.id}/telemetry/"
+    input_format  = "org.apache.hadoop.mapred.TextInputFormat"
+    output_format = "org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat"
+
+    ser_de_info {
+      name                  = "json-serde"
+      serialization_library = "org.openx.data.jsonserde.JsonSerDe"
+      parameters = {
+        "ignore.malformed.json" = "true"
+      }
+    }
+
+    columns {
+      name = "drone_id"
+      type = "string"
+    }
+    columns {
+      name = "timestamp"
+      type = "string"
+    }
+    columns {
+      name = "latitude"
+      type = "double"
+    }
+    columns {
+      name = "longitude"
+      type = "double"
+    }
+    columns {
+      name = "altitude_m"
+      type = "double"
+    }
+    columns {
+      name = "speed_kmh"
+      type = "double"
+    }
+    columns {
+      name = "heading_deg"
+      type = "double"
+    }
+    columns {
+      name = "battery_pct"
+      type = "double"
+    }
+    columns {
+      name = "flight_mode"
+      type = "string"
+    }
+    columns {
+      name = "status"
+      type = "string"
+    }
+    columns {
+      name = "schema_version"
+      type = "string"
+    }
+    columns {
+      name = "processed_at"
+      type = "string"
+    }
+    columns {
+      name = "source"
+      type = "string"
+    }
+    columns {
+      name = "has_anomaly"
+      type = "boolean"
+    }
+  }
+
+  partition_keys {
+    name = "year"
+    type = "string"
+  }
+  partition_keys {
+    name = "month"
+    type = "string"
+  }
+  partition_keys {
+    name = "day"
+    type = "string"
+  }
+  partition_keys {
+    name = "hour"
+    type = "string"
+  }
+}
+
+resource "aws_athena_workgroup" "telemetry_analytics" {
+  name        = "drone-telemetry-workgroup-${var.environment}"
+  description = "Athena workgroup for querying drone telemetry S3 data lake"
+
+  configuration {
+    enforce_workgroup_configuration    = true
+    publish_cloudwatch_metrics_enabled = true
+
+    result_configuration {
+      output_location = "s3://${aws_s3_bucket.telemetry.id}/athena-results/"
+      encryption_configuration {
+        encryption_option = "SSE_S3"
+      }
+    }
   }
 
   tags = {
